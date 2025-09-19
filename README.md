@@ -8,6 +8,7 @@ Organize files in a directory by category based on file extensions.
 - Safe moves with collision handling (adds "(1)", "(2)", ...)
 - Dry-run mode to preview changes
 - Optional recursive scan (skips category folders and common system dirs)
+- Built-in logging to console and file
 
 ### Requirements
 - Python 3.8+
@@ -20,6 +21,8 @@ python organize_files.py --path . --dry-run
 python organize_files.py --path C:\Users\anjan\Downloads
 python organize_files.py --path . --recursive
 python organize_files.py --path . --categories Documents,Images,Videos
+python organize_files.py --path . --dry-run --log-level DEBUG
+python organize_files.py --path . --log-file C:\\temp\\organize.log
 ```
 
 Options:
@@ -27,6 +30,8 @@ Options:
 - `--dry-run`: Preview planned moves without changing files
 - `--recursive`: Scan subdirectories (skips category folders)
 - `--categories`: Comma-separated list of categories to enable. Unknown extensions go to Others.
+- `--log-file`: Path to write logs (default: `organize_files.log`)
+- `--log-level`: Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (default: `INFO`)
 
 ### Categories and Extensions
 Default mapping (subset):

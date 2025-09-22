@@ -20,6 +20,7 @@ import hashlib
 import os
 import shutil
 import time
+import threading
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -27,6 +28,12 @@ import logging
 from logging import Logger
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
+
+try:
+    import schedule
+    SCHEDULE_AVAILABLE = True
+except ImportError:
+    SCHEDULE_AVAILABLE = False
 
 
 # Default categories and their known extensions
@@ -524,6 +531,97 @@ def print_directory_stats(directory: Path, logger: Optional[Logger] = None) -> N
             print(f"Newest file: {Path(stats['newest_file'][0]).name} ({newest_date})")
 
 
+class FileOrganizerScheduler:
+    """Scheduler for automatic file organization"""
+    
+    def __init__(self, logger: Optional[Logger] = None):
+        self.logger = logger or logging.getLogger("FileOrganizerScheduler")
+        self.scheduler_running = False
+        self.scheduled_directories: List[Dict] = []
+    
+    def add_scheduled_directory(self, directory: Path, frequency: str = "daily", time_str: str = "02:00", mode: str = "hybrid") -> bool:
+        """
+        Add directory to scheduled organization
+        frequency: 'daily', 'weekly'
+        time_str: '02:00' (24-hour format)
+        mode: 'extension', 'date', 'size', 'hybrid'
+        """
+        if not SCHEDULE_AVAILABLE:
+            self.logger.error("Schedule library not available. Install with: pip install schedule")
+            return False
+        
+        if not directory.exists():
+            self.logger.error(f"Cannot schedule non-existent directory: {directory}")
+            return False
+        
+        schedule_info = {
+            'directory': directory,
+            'frequency': frequency,
+            'time': time_str,
+            'mode': mode,
+            'last_run': None
+        }
+        
+        self.scheduled_directories.append(schedule_info)
+        
+        # Schedule the job
+        if frequency == "daily":
+            schedule.every().day.at(time_str).do(self.scheduled_organize, directory, mode)
+        elif frequency == "weekly":
+            schedule.every().week.at(time_str).do(self.scheduled_organize, directory, mode)
+        
+        self.logger.info(f"📅 Scheduled {frequency} organization for {directory} at {time_str} (mode: {mode})")
+        return True
+    
+    def scheduled_organize(self, directory: Path, mode: str = "hybrid"):
+        """Function called by scheduler"""
+        self.logger.info(f"🕒 Scheduled organization triggered for: {directory} (mode: {mode})")
+        
+        # Build extension mapping for hybrid mode
+        extension_to_category = build_extension_to_category(DEFAULT_CATEGORY_EXTENSIONS.keys())
+        
+        if mode == "hybrid":
+            organize_hybrid(directory, extension_to_category, self.logger)
+        elif mode == "date":
+            organize_by_date(directory, logger=self.logger)
+        elif mode == "size":
+            organize_by_size(directory, self.logger)
+        else:  # extension mode
+            # Use existing organize_files logic
+            files = list(iter_files(directory, recursive=False, category_names=DEFAULT_CATEGORY_EXTENSIONS.keys(), logger=self.logger))
+            plans = plan_moves(directory, files, extension_to_category, list(DEFAULT_CATEGORY_EXTENSIONS.keys()))
+            execute_moves(plans, dry_run=False, logger=self.logger)
+    
+    def start_scheduler(self):
+        """Start the scheduler in a background thread"""
+        if not SCHEDULE_AVAILABLE:
+            self.logger.error("Schedule library not available. Install with: pip install schedule")
+            return False
+        
+        if self.scheduler_running:
+            self.logger.info("Scheduler already running")
+            return True
+        
+        def run_scheduler():
+            self.scheduler_running = True
+            self.logger.info("🕒 Scheduler started")
+            
+            while self.scheduler_running:
+                schedule.run_pending()
+                time.sleep(60)  # Check every minute
+        
+        scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+        scheduler_thread.start()
+        return True
+    
+    def stop_scheduler(self):
+        """Stop the scheduler"""
+        self.scheduler_running = False
+        if SCHEDULE_AVAILABLE:
+            schedule.clear()
+        self.logger.info("🕒 Scheduler stopped")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Organize files by category")
     parser.add_argument(
@@ -595,6 +693,19 @@ def parse_args() -> argparse.Namespace:
         "--stats",
         action="store_true",
         help="Show comprehensive directory statistics",
+    )
+    # Scheduler arguments
+    parser.add_argument(
+        "--schedule",
+        type=str,
+        choices=["daily", "weekly"],
+        help="Schedule automatic organization (daily or weekly)",
+    )
+    parser.add_argument(
+        "--time",
+        type=str,
+        default="02:00",
+        help="Time for scheduled organization (HH:MM format, default: 02:00)",
     )
     return parser.parse_args()
 
@@ -776,6 +887,20 @@ def main() -> None:
         # Handle statistics
         if args.stats:
             print_directory_stats(base, logger)
+            return
+
+        # Handle scheduling
+        if args.schedule:
+            scheduler = FileOrganizerScheduler(logger)
+            if scheduler.add_scheduled_directory(base, args.schedule, args.time, args.mode):
+                logger.info(f"✓ Scheduled {args.schedule} organization for {base} at {args.time}")
+                scheduler.start_scheduler()
+                logger.info("🕒 Scheduler started. Press Ctrl+C to stop.")
+                try:
+                    while True:
+                        time.sleep(60)
+                except KeyboardInterrupt:
+                    scheduler.stop_scheduler()
             return
 
         # Handle duplicate detection

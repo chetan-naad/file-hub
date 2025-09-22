@@ -372,6 +372,73 @@ def organize_by_size(directory: Path, logger: Optional[Logger] = None) -> int:
         return 0
 
 
+def organize_hybrid(directory: Path, extension_to_category: Dict[str, str], logger: Optional[Logger] = None) -> int:
+    """
+    Hybrid organization: Group by file type, then by date within each type
+    Example: Images/2024/January/photo.jpg
+    """
+    if logger:
+        logger.info(f"🔄 Hybrid organization in: {directory}")
+    else:
+        print(f"🔄 Hybrid organization in: {directory}")
+    
+    moved_count = 0
+    
+    try:
+        for file_path in directory.iterdir():
+            if file_path.is_file():
+                try:
+                    # Get file type category
+                    file_ext = file_path.suffix.lower()
+                    category = extension_to_category.get(file_ext, "Others")
+                    
+                    # Get creation date
+                    creation_time = file_path.stat().st_ctime
+                    created_date = datetime.fromtimestamp(creation_time)
+                    date_folder = f"{created_date.year}/{created_date.strftime('%B')}"
+                    
+                    # Create nested folder structure: Category/Year/Month
+                    target_dir = directory / category / date_folder
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Move file
+                    destination = target_dir / file_path.name
+                    if destination.exists():
+                        counter = 1
+                        stem = file_path.stem
+                        suffix = file_path.suffix
+                        while destination.exists():
+                            destination = target_dir / f"{stem}_{counter}{suffix}"
+                            counter += 1
+                    
+                    shutil.move(str(file_path), str(destination))
+                    moved_count += 1
+                    
+                    if logger:
+                        logger.info(f"🔄 Moved {file_path.name} → {category}/{date_folder}/")
+                    else:
+                        print(f"🔄 Moved {file_path.name} → {category}/{date_folder}/")
+                    
+                except Exception as e:
+                    if logger:
+                        logger.error(f"Error in hybrid organization for {file_path.name}: {e}")
+                    else:
+                        print(f"Error in hybrid organization for {file_path.name}: {e}")
+        
+        if logger:
+            logger.info(f"✓ Hybrid organization complete. Moved {moved_count} files")
+        else:
+            print(f"✓ Hybrid organization complete. Moved {moved_count} files")
+        return moved_count
+        
+    except Exception as e:
+        if logger:
+            logger.error(f"Error in hybrid organization: {e}")
+        else:
+            print(f"Error in hybrid organization: {e}")
+        return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Organize files by category")
     parser.add_argument(
@@ -644,6 +711,18 @@ def main() -> None:
             else:
                 moved = organize_by_size(base, logger)
                 logger.info("Size organization complete. Moved: %d files", moved)
+            return
+
+        # Handle hybrid organization mode
+        if args.mode == "hybrid":
+            if args.dry_run:
+                logger.info("DRY-RUN: Would organize files by hybrid (type + date)")
+                # In dry-run mode, just show what would happen
+                file_count = sum(1 for f in base.iterdir() if f.is_file())
+                logger.info(f"Would organize {file_count} files by hybrid mode")
+            else:
+                moved = organize_hybrid(base, extension_to_category, logger)
+                logger.info("Hybrid organization complete. Moved: %d files", moved)
             return
 
         logger.info("Scanning: %s", base)

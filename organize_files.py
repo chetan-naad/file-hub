@@ -291,6 +291,87 @@ def organize_by_date(directory: Path, date_format: str = "year_month", logger: O
         return 0
 
 
+def organize_by_size(directory: Path, logger: Optional[Logger] = None) -> int:
+    """
+    Organize files by size categories:
+    - Small: < 1MB
+    - Medium: 1MB - 100MB  
+    - Large: > 100MB
+    """
+    if logger:
+        logger.info(f"📏 Organizing by size in: {directory}")
+    else:
+        print(f"📏 Organizing by size in: {directory}")
+    
+    moved_count = 0
+    size_stats = defaultdict(int)
+    
+    try:
+        for file_path in directory.iterdir():
+            if file_path.is_file():
+                try:
+                    file_size = file_path.stat().st_size
+                    
+                    # Determine size category
+                    if file_size < 1024 * 1024:  # < 1MB
+                        category = "Small_Files"
+                        size_label = f"{file_size / 1024:.1f}KB"
+                    elif file_size < 100 * 1024 * 1024:  # < 100MB
+                        category = "Medium_Files" 
+                        size_label = f"{file_size / (1024*1024):.1f}MB"
+                    else:  # >= 100MB
+                        category = "Large_Files"
+                        size_label = f"{file_size / (1024*1024):.1f}MB"
+                    
+                    # Create target directory
+                    target_dir = directory / category
+                    target_dir.mkdir(exist_ok=True)
+                    
+                    # Move file
+                    destination = target_dir / file_path.name
+                    if destination.exists():
+                        counter = 1
+                        stem = file_path.stem
+                        suffix = file_path.suffix
+                        while destination.exists():
+                            destination = target_dir / f"{stem}_{counter}{suffix}"
+                            counter += 1
+                    
+                    shutil.move(str(file_path), str(destination))
+                    moved_count += 1
+                    size_stats[category] += 1
+                    
+                    if logger:
+                        logger.info(f"📏 Moved {file_path.name} ({size_label}) → {category}/")
+                    else:
+                        print(f"📏 Moved {file_path.name} ({size_label}) → {category}/")
+                    
+                except Exception as e:
+                    if logger:
+                        logger.error(f"Error organizing {file_path.name} by size: {e}")
+                    else:
+                        print(f"Error organizing {file_path.name} by size: {e}")
+        
+        # Report statistics
+        if logger:
+            logger.info(f"✓ Size organization complete. Moved {moved_count} files")
+            for category, count in size_stats.items():
+                logger.info(f"  {category}: {count} files")
+        else:
+            print(f"✓ Size organization complete. Moved {moved_count} files")
+            for category, count in size_stats.items():
+                print(f"  {category}: {count} files")
+        
+        return moved_count
+        
+    except Exception as e:
+        if logger:
+            logger.error(f"Error in size organization: {e}")
+        else:
+            print(f"Error in size organization: {e}")
+        return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Organize files by category")
     parser.add_argument(
@@ -551,6 +632,18 @@ def main() -> None:
             else:
                 moved = organize_by_date(base, args.date_format, logger)
                 logger.info("Date organization complete. Moved: %d files", moved)
+            return
+
+        # Handle size organization mode
+        if args.mode == "size":
+            if args.dry_run:
+                logger.info("DRY-RUN: Would organize files by size")
+                # In dry-run mode, just show what would happen
+                file_count = sum(1 for f in base.iterdir() if f.is_file())
+                logger.info(f"Would organize {file_count} files by size")
+            else:
+                moved = organize_by_size(base, logger)
+                logger.info("Size organization complete. Moved: %d files", moved)
             return
 
         logger.info("Scanning: %s", base)

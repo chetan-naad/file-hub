@@ -16,8 +16,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 import logging
 from logging import Logger
@@ -59,6 +61,162 @@ class MovePlan:
     reason: str
 
 
+@dataclass
+class DuplicateGroup:
+    files: List[Path]
+    hash_value: str
+    total_size: int
+
+
+def get_file_hash(file_path: Path, chunk_size: int = 8192) -> Optional[str]:
+    """
+    Generate MD5 hash for duplicate detection
+    Optimized for large files with chunked reading
+    """
+    try:
+        hash_md5 = hashlib.md5()
+        with open(file_path, "rb") as f:
+            # Read file in chunks to handle large files efficiently
+            while chunk := f.read(chunk_size):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+    except Exception as e:
+        print(f"Error hashing {file_path}: {e}")
+        return None
+
+
+def find_duplicates(directory: Path, logger: Optional[Logger] = None) -> List[DuplicateGroup]:
+    """
+    Find duplicate files using MD5 hashing
+    Returns list of duplicate file groups
+    """
+    if logger:
+        logger.info(f"🔍 Starting duplicate scan in: {directory}")
+    else:
+        print(f"🔍 Starting duplicate scan in: {directory}")
+    
+    hash_map: Dict[str, List[Path]] = defaultdict(list)
+    duplicates: List[DuplicateGroup] = []
+    file_count = 0
+    
+    try:
+        # Scan all files and calculate hashes
+        for root, _, files in os.walk(directory):
+            for file in files:
+                file_path = Path(root) / file
+                
+                # Skip system files and very small files
+                if file_path.stat().st_size < 10:  # Skip files smaller than 10 bytes
+                    continue
+                
+                file_hash = get_file_hash(file_path)
+                if file_hash:
+                    hash_map[file_hash].append(file_path)
+                    file_count += 1
+                    
+                    # Progress indication
+                    if file_count % 100 == 0:
+                        if logger:
+                            logger.info(f"Processed {file_count} files...")
+                        else:
+                            print(f"Processed {file_count} files...")
+        
+        # Find duplicates
+        total_duplicate_files = 0
+        for file_hash, paths in hash_map.items():
+            if len(paths) > 1:
+                total_size = sum(path.stat().st_size for path in paths)
+                duplicates.append(DuplicateGroup(
+                    files=paths,
+                    hash_value=file_hash,
+                    total_size=total_size
+                ))
+                total_duplicate_files += len(paths)
+        
+        # Statistics
+        if logger:
+            logger.info(f"✓ Duplicate scan complete")
+            logger.info(f"📊 Files scanned: {file_count}")
+            logger.info(f"🔄 Duplicate sets found: {len(duplicates)}")
+            logger.info(f"📁 Total duplicate files: {total_duplicate_files}")
+        else:
+            print(f"✓ Duplicate scan complete")
+            print(f"📊 Files scanned: {file_count}")
+            print(f"🔄 Duplicate sets found: {len(duplicates)}")
+            print(f"📁 Total duplicate files: {total_duplicate_files}")
+        
+        return duplicates
+        
+    except Exception as e:
+        if logger:
+            logger.error(f"Error during duplicate scan: {e}")
+        else:
+            print(f"Error during duplicate scan: {e}")
+        return []
+
+
+def remove_duplicates_interactive(directory: Path, logger: Optional[Logger] = None) -> Tuple[int, int]:
+    """
+    Interactive duplicate removal
+    Shows duplicates and asks user which ones to keep
+    Returns (removed_count, saved_space_bytes)
+    """
+    duplicates = find_duplicates(directory, logger)
+    
+    if not duplicates:
+        if logger:
+            logger.info("No duplicates found!")
+        else:
+            print("No duplicates found!")
+        return 0, 0
+    
+    removed_count = 0
+    saved_space = 0
+    
+    for i, duplicate_group in enumerate(duplicates, 1):
+        print(f"\n🔄 Duplicate Set {i}:")
+        for j, file_path in enumerate(duplicate_group.files):
+            file_size = file_path.stat().st_size
+            print(f"  {j+1}. {file_path} ({file_size / 1024:.1f} KB)")
+        
+        try:
+            choice = input(f"Keep which file? (1-{len(duplicate_group.files)}, 'a' for all, 's' for skip): ").strip()
+            
+            if choice.lower() == 's':
+                continue
+            elif choice.lower() == 'a':
+                continue
+            else:
+                keep_index = int(choice) - 1
+                if 0 <= keep_index < len(duplicate_group.files):
+                    # Remove all except the chosen one
+                    for j, file_path in enumerate(duplicate_group.files):
+                        if j != keep_index:
+                            file_size = file_path.stat().st_size
+                            file_path.unlink()  # Delete file
+                            removed_count += 1
+                            saved_space += file_size
+                            if logger:
+                                logger.info(f"🗑️ Removed duplicate: {file_path}")
+                            else:
+                                print(f"🗑️ Removed duplicate: {file_path}")
+            
+        except (ValueError, IndexError):
+            print("Invalid choice, skipping this set")
+            continue
+    
+    if logger:
+        logger.info(f"✓ Duplicate removal complete")
+        logger.info(f"🗑️ Files removed: {removed_count}")
+        logger.info(f"💾 Space saved: {saved_space / (1024*1024):.2f} MB")
+    else:
+        print(f"✓ Duplicate removal complete")
+        print(f"🗑️ Files removed: {removed_count}")
+        print(f"💾 Space saved: {saved_space / (1024*1024):.2f} MB")
+    
+    return removed_count, saved_space
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Organize files by category")
     parser.add_argument(
@@ -98,6 +256,17 @@ def parse_args() -> argparse.Namespace:
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="Logging level (default: INFO)",
+    )
+    # Duplicate detection arguments
+    parser.add_argument(
+        "--find-duplicates",
+        action="store_true",
+        help="Find and report duplicate files using MD5 hashing",
+    )
+    parser.add_argument(
+        "--remove-duplicates",
+        action="store_true",
+        help="Interactive duplicate removal (requires --find-duplicates)",
     )
     return parser.parse_args()
 
@@ -275,6 +444,13 @@ def main() -> None:
 
         enabled_categories = [c.strip() for c in args.categories.split(",") if c.strip()]
         extension_to_category = build_extension_to_category(enabled_categories)
+
+        # Handle duplicate detection
+        if args.find_duplicates or args.remove_duplicates:
+            duplicates = find_duplicates(base, logger)
+            if args.remove_duplicates:
+                remove_duplicates_interactive(base, logger)
+            return
 
         logger.info("Scanning: %s", base)
         logger.info(

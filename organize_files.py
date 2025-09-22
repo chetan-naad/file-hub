@@ -622,6 +622,141 @@ class FileOrganizerScheduler:
         self.logger.info("🕒 Scheduler stopped")
 
 
+def create_test_files_advanced() -> str:
+    """Create advanced test files with various dates and sizes"""
+    test_dir = Path("smart_test_directory")
+    test_dir.mkdir(exist_ok=True)
+    
+    files_to_create = [
+        # Documents with different dates
+        ("old_document.pdf", "Old document content", 30),
+        ("recent_report.docx", "Recent report content", 5),
+        ("spreadsheet.xlsx", "X" * 1000, 2),
+        
+        # Images with different sizes  
+        ("small_photo.jpg", "JPEG" + "x" * 500, 10),
+        ("large_photo.png", "PNG" + "x" * 50000, 1),
+        
+        # Create duplicates
+        ("duplicate1.txt", "Same content for testing", 7),
+        ("duplicate2.txt", "Same content for testing", 7),
+        ("duplicate3.txt", "Different content", 7),
+        
+        # Large files
+        ("large_video.mp4", "VIDEO" + "x" * 2000000, 1),  # ~2MB
+        ("huge_file.bin", "DATA" + "x" * 50000000, 1),    # ~50MB
+    ]
+    
+    for filename, content, days_ago in files_to_create:
+        file_path = test_dir / filename
+        file_path.write_text(content)
+        
+        # Set different modification times
+        past_time = time.time() - (days_ago * 24 * 3600)
+        os.utime(file_path, (past_time, past_time))
+    
+    print(f"✓ Created advanced test files in: {test_dir}")
+    return str(test_dir)
+
+
+def interactive_mode(logger: Logger) -> None:
+    """Interactive mode with menu options"""
+    print("=" * 70)
+    print("🤖 SMART FILE ORGANIZER - Phase 3")
+    print("=" * 70)
+    print("Smart Features:")
+    print("🤖 Smart categorization (date/size/hybrid)")
+    print("🔍 Duplicate detection with MD5 hashing")
+    print("🕒 Automatic scheduler (daily/weekly)")
+    print("📊 Advanced statistics and reporting")
+    print("=" * 70)
+    
+    scheduler = FileOrganizerScheduler(logger)
+    
+    while True:
+        print("\n🚀 Smart Options:")
+        print("1. Smart Organize (Extension + Date)")
+        print("2. Organize by Date Only")
+        print("3. Organize by Size Only") 
+        print("4. Find & Remove Duplicates")
+        print("5. Schedule Auto-Organization")
+        print("6. Directory Statistics")
+        print("7. Create Test Files")
+        print("8. Start/Stop Scheduler")
+        print("9. Exit")
+        
+        try:
+            choice = input("\nSelect option (1-9): ").strip()
+            
+            if choice == "1":
+                directory = input("Enter directory path: ").strip().strip('"\'')
+                if directory:
+                    extension_to_category = build_extension_to_category(DEFAULT_CATEGORY_EXTENSIONS.keys())
+                    moved = organize_hybrid(Path(directory), extension_to_category, logger)
+                    print(f"✓ Smart organization complete! Moved {moved} files")
+            
+            elif choice == "2":
+                directory = input("Enter directory path: ").strip().strip('"\'')
+                if directory:
+                    date_format = input("Date format (year_month/year_only/full_date): ").strip() or "year_month"
+                    moved = organize_by_date(Path(directory), date_format, logger)
+                    print(f"✓ Date organization complete! Moved {moved} files")
+            
+            elif choice == "3":
+                directory = input("Enter directory path: ").strip().strip('"\'')
+                if directory:
+                    moved = organize_by_size(Path(directory), logger)
+                    print(f"✓ Size organization complete! Moved {moved} files")
+            
+            elif choice == "4":
+                directory = input("Enter directory path: ").strip().strip('"\'')
+                if directory:
+                    remove_duplicates_interactive(Path(directory), logger)
+            
+            elif choice == "5":
+                directory = input("Enter directory path to schedule: ").strip().strip('"\'')
+                frequency = input("Frequency (daily/weekly): ").strip() or "daily"
+                time_str = input("Time (HH:MM, 24-hour): ").strip() or "02:00"
+                mode = input("Mode (extension/date/size/hybrid): ").strip() or "hybrid"
+                
+                if scheduler.add_scheduled_directory(Path(directory), frequency, time_str, mode):
+                    print(f"✓ Scheduled {frequency} organization for {directory} at {time_str}")
+                    if not scheduler.scheduler_running:
+                        scheduler.start_scheduler()
+            
+            elif choice == "6":
+                directory = input("Enter directory path: ").strip().strip('"\'')
+                if directory:
+                    print_directory_stats(Path(directory), logger)
+            
+            elif choice == "7":
+                test_dir = create_test_files_advanced()
+                print(f"✓ Test files created in: {test_dir}")
+            
+            elif choice == "8":
+                if scheduler.scheduler_running:
+                    scheduler.stop_scheduler()
+                    print("🕒 Scheduler stopped")
+                else:
+                    scheduler.start_scheduler()
+                    print("🕒 Scheduler started")
+            
+            elif choice == "9":
+                scheduler.stop_scheduler()
+                print("👋 Goodbye!")
+                break
+            
+            else:
+                print("❌ Invalid choice. Please select 1-9.")
+                
+        except KeyboardInterrupt:
+            print("\n\n⚠️ Operation cancelled by user.")
+            scheduler.stop_scheduler()
+            break
+        except Exception as e:
+            print(f"❌ Error: {e}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Organize files by category")
     parser.add_argument(
@@ -706,6 +841,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="02:00",
         help="Time for scheduled organization (HH:MM format, default: 02:00)",
+    )
+    # Interactive mode argument
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Run in interactive mode with menu options",
     )
     return parser.parse_args()
 
@@ -874,7 +1015,13 @@ def setup_logger(log_file: str, log_level: str) -> Logger:
 def main() -> None:
     args = parse_args()
     logger = setup_logger(args.log_file, args.log_level)
+    
     try:
+        # Interactive mode
+        if args.interactive:
+            interactive_mode(logger)
+            return
+        
         base = Path(args.path).expanduser().resolve()
 
         if not base.exists() or not base.is_dir():

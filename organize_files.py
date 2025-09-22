@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
 """
-Organize files in a directory by category based on file extensions.
+Smart File Organizer - Phase 3
+Advanced file organization with smart features.
 
 Features:
 - Classifies into Documents, Images, Videos, Audio, Archives, Code, and Others
 - Creates destination folders dynamically
 - Safe moves with collision handling
 - Dry-run mode to preview changes
+- Smart categorization (date, size, hybrid)
+- Duplicate finder using MD5 hashing
+- Scheduler for auto-run
+- Advanced file organization
+- Interactive duplicate removal
+- Comprehensive statistics
 
 Usage:
   python organize_files.py --path C:\\path\\to\\folder --dry-run
-  python organize_files.py --path .
+  python organize_files.py --path . --mode hybrid
+  python organize_files.py --path . --find-duplicates
+  python organize_files.py --path . --schedule daily --time 02:00
+  python organize_files.py --interactive
 """
 
 from __future__ import annotations
@@ -1119,5 +1129,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

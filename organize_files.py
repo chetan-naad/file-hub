@@ -19,8 +19,10 @@ import argparse
 import hashlib
 import os
 import shutil
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 import logging
 from logging import Logger
 from pathlib import Path
@@ -217,6 +219,78 @@ def remove_duplicates_interactive(directory: Path, logger: Optional[Logger] = No
     return removed_count, saved_space
 
 
+def organize_by_date(directory: Path, date_format: str = "year_month", logger: Optional[Logger] = None) -> int:
+    """
+    Organize files by creation date
+    Formats: 'year_month' (2024/January), 'year_only' (2024), 'full_date' (2024/01/15)
+    """
+    if logger:
+        logger.info(f"📅 Organizing by date in: {directory}")
+    else:
+        print(f"📅 Organizing by date in: {directory}")
+    
+    moved_count = 0
+    
+    try:
+        for file_path in directory.iterdir():
+            if file_path.is_file():
+                try:
+                    # Get file creation time
+                    creation_time = file_path.stat().st_ctime
+                    created_date = datetime.fromtimestamp(creation_time)
+                    
+                    # Generate folder name based on format
+                    if date_format == "year_month":
+                        folder_name = f"{created_date.year}/{created_date.strftime('%B')}"
+                    elif date_format == "year_only":
+                        folder_name = str(created_date.year)
+                    elif date_format == "full_date":
+                        folder_name = created_date.strftime("%Y/%m/%d")
+                    else:
+                        folder_name = created_date.strftime("%Y/%B")
+                    
+                    # Create target directory
+                    target_dir = directory / folder_name
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Move file
+                    destination = target_dir / file_path.name
+                    if destination.exists():
+                        # Handle naming conflicts
+                        counter = 1
+                        stem = file_path.stem
+                        suffix = file_path.suffix
+                        while destination.exists():
+                            destination = target_dir / f"{stem}_{counter}{suffix}"
+                            counter += 1
+                    
+                    shutil.move(str(file_path), str(destination))
+                    moved_count += 1
+                    if logger:
+                        logger.info(f"📅 Moved {file_path.name} → {folder_name}/")
+                    else:
+                        print(f"📅 Moved {file_path.name} → {folder_name}/")
+                    
+                except Exception as e:
+                    if logger:
+                        logger.error(f"Error organizing {file_path.name} by date: {e}")
+                    else:
+                        print(f"Error organizing {file_path.name} by date: {e}")
+        
+        if logger:
+            logger.info(f"✓ Date organization complete. Moved {moved_count} files")
+        else:
+            print(f"✓ Date organization complete. Moved {moved_count} files")
+        return moved_count
+        
+    except Exception as e:
+        if logger:
+            logger.error(f"Error in date organization: {e}")
+        else:
+            print(f"Error in date organization: {e}")
+        return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Organize files by category")
     parser.add_argument(
@@ -267,6 +341,21 @@ def parse_args() -> argparse.Namespace:
         "--remove-duplicates",
         action="store_true",
         help="Interactive duplicate removal (requires --find-duplicates)",
+    )
+    # Organization mode arguments
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="extension",
+        choices=["extension", "date", "size", "hybrid"],
+        help="Organization mode: extension (default), date, size, or hybrid",
+    )
+    parser.add_argument(
+        "--date-format",
+        type=str,
+        default="year_month",
+        choices=["year_month", "year_only", "full_date"],
+        help="Date format for date organization (default: year_month)",
     )
     return parser.parse_args()
 
@@ -450,6 +539,18 @@ def main() -> None:
             duplicates = find_duplicates(base, logger)
             if args.remove_duplicates:
                 remove_duplicates_interactive(base, logger)
+            return
+
+        # Handle date organization mode
+        if args.mode == "date":
+            if args.dry_run:
+                logger.info("DRY-RUN: Would organize files by date")
+                # In dry-run mode, just show what would happen
+                file_count = sum(1 for f in base.iterdir() if f.is_file())
+                logger.info(f"Would organize {file_count} files by date using format: {args.date_format}")
+            else:
+                moved = organize_by_date(base, args.date_format, logger)
+                logger.info("Date organization complete. Moved: %d files", moved)
             return
 
         logger.info("Scanning: %s", base)

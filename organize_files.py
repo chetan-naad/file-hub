@@ -439,6 +439,91 @@ def organize_hybrid(directory: Path, extension_to_category: Dict[str, str], logg
         return 0
 
 
+def get_directory_stats(directory: Path, logger: Optional[Logger] = None) -> Dict:
+    """Get comprehensive directory statistics"""
+    stats = {
+        'total_files': 0,
+        'total_size': 0,
+        'file_types': Counter(),
+        'size_distribution': {'small': 0, 'medium': 0, 'large': 0},
+        'oldest_file': None,
+        'newest_file': None
+    }
+    
+    try:
+        for root, _, files in os.walk(directory):
+            for file in files:
+                file_path = Path(root) / file
+                file_stat = file_path.stat()
+                
+                stats['total_files'] += 1
+                stats['total_size'] += file_stat.st_size
+                stats['file_types'][file_path.suffix.lower()] += 1
+                
+                # Size distribution
+                if file_stat.st_size < 1024 * 1024:
+                    stats['size_distribution']['small'] += 1
+                elif file_stat.st_size < 100 * 1024 * 1024:
+                    stats['size_distribution']['medium'] += 1
+                else:
+                    stats['size_distribution']['large'] += 1
+                
+                # Track oldest and newest files
+                creation_time = file_stat.st_ctime
+                if stats['oldest_file'] is None or creation_time < stats['oldest_file'][1]:
+                    stats['oldest_file'] = (str(file_path), creation_time)
+                if stats['newest_file'] is None or creation_time > stats['newest_file'][1]:
+                    stats['newest_file'] = (str(file_path), creation_time)
+    
+    except Exception as e:
+        if logger:
+            logger.error(f"Error getting directory stats: {e}")
+        else:
+            print(f"Error getting directory stats: {e}")
+    
+    return stats
+
+
+def print_directory_stats(directory: Path, logger: Optional[Logger] = None) -> None:
+    """Print comprehensive directory statistics"""
+    stats = get_directory_stats(directory, logger)
+    
+    if logger:
+        logger.info("📊 Directory Statistics:")
+        logger.info(f"Total files: {stats['total_files']:,}")
+        logger.info(f"Total size: {stats['total_size'] / (1024*1024*1024):.2f} GB")
+        logger.info(f"File types: {len(stats['file_types'])}")
+        logger.info("Size distribution:")
+        logger.info(f"  Small (<1MB): {stats['size_distribution']['small']}")
+        logger.info(f"  Medium (1-100MB): {stats['size_distribution']['medium']}")
+        logger.info(f"  Large (>100MB): {stats['size_distribution']['large']}")
+        
+        if stats['oldest_file']:
+            oldest_date = datetime.fromtimestamp(stats['oldest_file'][1]).strftime("%Y-%m-%d %H:%M:%S")
+            logger.info(f"Oldest file: {Path(stats['oldest_file'][0]).name} ({oldest_date})")
+        
+        if stats['newest_file']:
+            newest_date = datetime.fromtimestamp(stats['newest_file'][1]).strftime("%Y-%m-%d %H:%M:%S")
+            logger.info(f"Newest file: {Path(stats['newest_file'][0]).name} ({newest_date})")
+    else:
+        print("📊 Directory Statistics:")
+        print(f"Total files: {stats['total_files']:,}")
+        print(f"Total size: {stats['total_size'] / (1024*1024*1024):.2f} GB")
+        print(f"File types: {len(stats['file_types'])}")
+        print("Size distribution:")
+        print(f"  Small (<1MB): {stats['size_distribution']['small']}")
+        print(f"  Medium (1-100MB): {stats['size_distribution']['medium']}")
+        print(f"  Large (>100MB): {stats['size_distribution']['large']}")
+        
+        if stats['oldest_file']:
+            oldest_date = datetime.fromtimestamp(stats['oldest_file'][1]).strftime("%Y-%m-%d %H:%M:%S")
+            print(f"Oldest file: {Path(stats['oldest_file'][0]).name} ({oldest_date})")
+        
+        if stats['newest_file']:
+            newest_date = datetime.fromtimestamp(stats['newest_file'][1]).strftime("%Y-%m-%d %H:%M:%S")
+            print(f"Newest file: {Path(stats['newest_file'][0]).name} ({newest_date})")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Organize files by category")
     parser.add_argument(
@@ -504,6 +589,12 @@ def parse_args() -> argparse.Namespace:
         default="year_month",
         choices=["year_month", "year_only", "full_date"],
         help="Date format for date organization (default: year_month)",
+    )
+    # Statistics argument
+    parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Show comprehensive directory statistics",
     )
     return parser.parse_args()
 
@@ -681,6 +772,11 @@ def main() -> None:
 
         enabled_categories = [c.strip() for c in args.categories.split(",") if c.strip()]
         extension_to_category = build_extension_to_category(enabled_categories)
+
+        # Handle statistics
+        if args.stats:
+            print_directory_stats(base, logger)
+            return
 
         # Handle duplicate detection
         if args.find_duplicates or args.remove_duplicates:

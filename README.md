@@ -45,6 +45,21 @@ Advanced file organization with smart features and intelligent categorization.
 
 ## 🚀 Usage
 
+### Graphical User Interface (GUI)
+
+```bash
+# Launch the basic Tkinter GUI
+python organize_files.py --gui
+```
+
+Optional drag & drop support:
+
+```bash
+pip install tkinterdnd2
+```
+
+If drag-and-drop is available, you can drop a folder onto the folder field.
+
 ### Command Line Interface
 
 #### Basic Organization
@@ -99,6 +114,9 @@ python organize_files.py --path . --schedule weekly --time 09:00 --mode date
 ```bash
 # Launch interactive menu
 python organize_files.py --interactive
+
+# Or use the CLI alias flag
+python organize_files.py --cli
 ```
 
 ### Interactive Mode Menu
@@ -154,6 +172,8 @@ Any unrecognized file extension
 | `--schedule` | Schedule organization: `daily`, `weekly` | None |
 | `--time` | Time for scheduled runs (HH:MM format) | `02:00` |
 | `--interactive` | Launch interactive mode | False |
+| `--gui` | Launch basic Tkinter GUI | False |
+| `--cli` | Alias of --interactive for CLI menu | False |
 | `--log-file` | Path to log file | `organize_files.log` |
 | `--log-level` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | `INFO` |
 

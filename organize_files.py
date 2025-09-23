@@ -31,6 +31,8 @@ import os
 import shutil
 import time
 import threading
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -72,6 +74,317 @@ DEFAULT_CATEGORY_EXTENSIONS: Dict[str, Tuple[str, ...]] = {
     ),
 }
 
+
+class SmartFileOrganizer:
+    """Thin wrapper exposing programmatic API with optional callbacks."""
+
+    def __init__(self, logger: Optional[Logger] = None):
+        self.logger: Logger = logger or logging.getLogger("organize_files.SmartFileOrganizer")
+        if not self.logger.handlers:
+            # Default console-only logger if not configured by caller
+            self.logger.setLevel(logging.INFO)
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter(fmt="%(asctime)s | %(levelname)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+            self.logger.addHandler(handler)
+        self._progress_cb = None
+        self._status_cb = None
+
+    def set_callbacks(self, progress_callback=None, status_callback=None) -> None:
+        self._progress_cb = progress_callback
+        self._status_cb = status_callback
+
+    def _progress(self, value: float) -> None:
+        try:
+            if self._progress_cb:
+                self._progress_cb(value)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _status(self, message: str) -> None:
+        if self._status_cb:
+            try:
+                self._status_cb(message)
+            except Exception:  # noqa: BLE001
+                pass
+        self.logger.info(message)
+
+    def organize_extension(self, directory: Path, categories: Optional[List[str]] = None, dry_run: bool = False) -> Tuple[int, int]:
+        base = Path(directory)
+        cats = categories or list(DEFAULT_CATEGORY_EXTENSIONS.keys())
+        ext_to_cat = build_extension_to_category(cats)
+        self._status(f"Organizing by extension in: {base}")
+        files = list(iter_files(base, recursive=False, category_names=cats + ["Others"], logger=self.logger))
+        plans = plan_moves(base, files, ext_to_cat, cats)
+        total = max(1, len(plans))
+        moved = 0
+        skipped = 0
+        if dry_run:
+            for idx, p in enumerate(plans, 1):
+                self.logger.info("DRY-RUN: Would move '%s' -> '%s' (%s)", p.source, p.destination, p.reason)
+                self._progress(idx * 100.0 / total)
+            self._status(f"DRY-RUN complete. Planned moves: {len(plans)}")
+            return 0, 0
+        for idx, p in enumerate(plans, 1):
+            try:
+                p.destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(p.source), str(p.destination))
+                self.logger.info("Moved: '%s' -> '%s'", p.source, p.destination)
+                moved += 1
+            except Exception as exc:  # noqa: BLE001
+                self.logger.error("Skip: '%s' -> '%s' due to error: %s", p.source, p.destination, exc)
+                skipped += 1
+            finally:
+                self._progress(idx * 100.0 / total)
+        self._status(f"Done. Moved: {moved}, Skipped: {skipped}")
+        return moved, skipped
+
+    def organize_date(self, directory: Path, date_format: str = "year_month") -> int:
+        self._status(f"Organizing by date in: {directory}")
+        return organize_by_date(Path(directory), date_format, logger=self.logger)
+
+    def organize_size(self, directory: Path) -> int:
+        self._status(f"Organizing by size in: {directory}")
+        return organize_by_size(Path(directory), logger=self.logger)
+
+    def organize_hybrid(self, directory: Path, categories: Optional[List[str]] = None) -> int:
+        cats = categories or list(DEFAULT_CATEGORY_EXTENSIONS.keys())
+        mapping = build_extension_to_category(cats)
+        self._status(f"Hybrid organization in: {directory}")
+        return organize_hybrid(Path(directory), mapping, logger=self.logger)
+
+    def find_duplicates_in(self, directory: Path) -> List[DuplicateGroup]:
+        self._status(f"Scanning for duplicates in: {directory}")
+        return find_duplicates(Path(directory), logger=self.logger)
+
+    def get_stats(self, directory: Path) -> Dict:
+        self._status(f"Collecting directory stats in: {directory}")
+        return get_directory_stats(Path(directory), logger=self.logger)
+
+
+class BasicOrganizerGUI:
+    """Minimal Tkinter GUI using SmartFileOrganizer."""
+
+    def __init__(self, logger: Logger):
+        self.logger = logger
+        self.org = SmartFileOrganizer(logger)
+        # Try enable drag and drop via tkinterdnd2
+        self._dnd_enabled = False
+        try:
+            from tkinterdnd2 import TkinterDnD, DND_FILES  # type: ignore
+            self._DND_FILES = DND_FILES
+            self.root = TkinterDnD.Tk()
+            self._dnd_enabled = True
+        except Exception:  # noqa: BLE001
+            self.root = tk.Tk()
+        self.root.title("Smart File Organizer")
+        self.root.geometry("700x500")
+
+        self.selected_folder = tk.StringVar()
+        self.mode = tk.StringVar(value="extension")
+        self.date_format = tk.StringVar(value="year_month")
+
+        self.progress_var = tk.DoubleVar(value=0.0)
+        self.status_var = tk.StringVar(value="Ready")
+
+        self._build_ui()
+        self.org.set_callbacks(progress_callback=self._on_progress, status_callback=self._on_status)
+        self._working = False
+
+    def _build_ui(self) -> None:
+        pad = {"padx": 10, "pady": 10}
+        container = ttk.Frame(self.root, padding=10)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        title = ttk.Label(container, text="Smart File Organizer", font=("Segoe UI", 16, "bold"))
+        title.grid(row=0, column=0, columnspan=3, sticky=tk.W, **pad)
+
+        # Folder picker
+        folder_frame = ttk.LabelFrame(container, text="Folder", padding=10)
+        folder_frame.grid(row=1, column=0, columnspan=3, sticky=tk.EW, **pad)
+        self._folder_entry = ttk.Entry(folder_frame, textvariable=self.selected_folder)
+        self._folder_entry.grid(row=0, column=0, sticky=tk.EW, **pad)
+        browse_btn = ttk.Button(folder_frame, text="Browse", command=self._browse)
+        browse_btn.grid(row=0, column=1, **pad)
+        folder_frame.columnconfigure(0, weight=1)
+        # Setup drag & drop on entry if available
+        if self._dnd_enabled:
+            try:
+                self._folder_entry.drop_target_register(self._DND_FILES)  # type: ignore[attr-defined]
+                self._folder_entry.dnd_bind('<<Drop>>', self._on_drop)  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Mode selection
+        mode_frame = ttk.LabelFrame(container, text="Mode", padding=10)
+        mode_frame.grid(row=2, column=0, columnspan=3, sticky=tk.EW, **pad)
+        ttk.Radiobutton(mode_frame, text="By Extension", value="extension", variable=self.mode).grid(row=0, column=0, sticky=tk.W, **pad)
+        ttk.Radiobutton(mode_frame, text="By Date", value="date", variable=self.mode, command=self._toggle_date).grid(row=0, column=1, sticky=tk.W, **pad)
+        ttk.Radiobutton(mode_frame, text="By Size", value="size", variable=self.mode, command=self._toggle_date).grid(row=0, column=2, sticky=tk.W, **pad)
+        ttk.Radiobutton(mode_frame, text="Hybrid", value="hybrid", variable=self.mode, command=self._toggle_date).grid(row=0, column=3, sticky=tk.W, **pad)
+
+        # Date format row
+        self.date_row = ttk.Frame(mode_frame)
+        self.date_row.grid(row=1, column=0, columnspan=4, sticky=tk.W, **pad)
+        ttk.Label(self.date_row, text="Date format:").grid(row=0, column=0, **pad)
+        ttk.Radiobutton(self.date_row, text="Year/Month", value="year_month", variable=self.date_format).grid(row=0, column=1, **pad)
+        ttk.Radiobutton(self.date_row, text="Year only", value="year_only", variable=self.date_format).grid(row=0, column=2, **pad)
+        ttk.Radiobutton(self.date_row, text="Full date", value="full_date", variable=self.date_format).grid(row=0, column=3, **pad)
+        self._toggle_date()
+
+        # Actions
+        actions = ttk.Frame(container)
+        actions.grid(row=3, column=0, columnspan=3, **pad)
+        ttk.Button(actions, text="Start", command=self._start).grid(row=0, column=0, **pad)
+        ttk.Button(actions, text="Find Duplicates", command=self._duplicates).grid(row=0, column=1, **pad)
+        ttk.Button(actions, text="Stats", command=self._stats).grid(row=0, column=2, **pad)
+
+        # Progress and status
+        prog = ttk.Frame(container)
+        prog.grid(row=4, column=0, columnspan=3, sticky=tk.EW, **pad)
+        pbar = ttk.Progressbar(prog, variable=self.progress_var, maximum=100)
+        pbar.grid(row=0, column=0, sticky=tk.EW, **pad)
+        status = ttk.Label(prog, textvariable=self.status_var)
+        status.grid(row=1, column=0, sticky=tk.W, **pad)
+        prog.columnconfigure(0, weight=1)
+
+        # Results
+        results = ttk.LabelFrame(container, text="Results", padding=10)
+        results.grid(row=5, column=0, columnspan=3, sticky=tk.NSEW, **pad)
+        self.text = tk.Text(results, height=12)
+        self.text.pack(fill=tk.BOTH, expand=True)
+
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(5, weight=1)
+
+    def _toggle_date(self) -> None:
+        if self.mode.get() == "date":
+            self.date_row.grid()
+        else:
+            self.date_row.grid_remove()
+
+    def _browse(self) -> None:
+        folder = filedialog.askdirectory()
+        if folder:
+            self.selected_folder.set(folder)
+
+    def _on_drop(self, event) -> None:
+        # Handle paths possibly wrapped in braces and separated by spaces
+        data = str(event.data).strip()
+        if not data:
+            return
+        # Windows drops are like: {C:\path with spaces} {C:\other}
+        paths: List[str] = []
+        token = ''
+        in_brace = False
+        for ch in data:
+            if ch == '{':
+                in_brace = True
+                token = ''
+                continue
+            if ch == '}':
+                in_brace = False
+                paths.append(token)
+                token = ''
+                continue
+            if ch == ' ' and not in_brace:
+                if token:
+                    paths.append(token)
+                    token = ''
+                continue
+            token += ch
+        if token:
+            paths.append(token)
+        if paths:
+            p = paths[0]
+            if os.path.isdir(p):
+                self.selected_folder.set(p)
+
+    def _append(self, s: str) -> None:
+        self.text.insert(tk.END, s + "\n")
+        self.text.see(tk.END)
+
+    def _validate(self) -> Optional[Path]:
+        p = self.selected_folder.get().strip()
+        if not p or not os.path.isdir(p):
+            messagebox.showerror("Error", "Please select a valid folder")
+            return None
+        return Path(p)
+
+    def _on_progress(self, v: float) -> None:
+        self.progress_var.set(v)
+        self.root.update_idletasks()
+
+    def _on_status(self, msg: str) -> None:
+        self.status_var.set(msg)
+        self.root.update_idletasks()
+
+    def _run_bg(self, target) -> None:
+        if self._working:
+            messagebox.showwarning("Busy", "An operation is already running")
+            return
+        def runner():
+            try:
+                self._working = True
+                target()
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror("Error", str(exc))
+            finally:
+                self._working = False
+                self.progress_var.set(0)
+                self.status_var.set("Ready")
+        threading.Thread(target=runner, daemon=True).start()
+
+    def _start(self) -> None:
+        base = self._validate()
+        if not base:
+            return
+        mode = self.mode.get()
+        def work():
+            t0 = time.time()
+            if mode == "extension":
+                moved, skipped = self.org.organize_extension(base)
+                self._append(f"Moved: {moved}, Skipped: {skipped}")
+            elif mode == "date":
+                moved = self.org.organize_date(base, self.date_format.get())
+                self._append(f"Moved: {moved}")
+            elif mode == "size":
+                moved = self.org.organize_size(base)
+                self._append(f"Moved: {moved}")
+            else:
+                moved = self.org.organize_hybrid(base)
+                self._append(f"Moved: {moved}")
+            self._append(f"Duration: {time.time() - t0:.2f}s")
+        self._run_bg(work)
+
+    def _duplicates(self) -> None:
+        base = self._validate()
+        if not base:
+            return
+        def work():
+            groups = self.org.find_duplicates_in(base)
+            if not groups:
+                self._append("No duplicates found")
+                return
+            self._append(f"Duplicate sets: {len(groups)}")
+            for i, g in enumerate(groups[:10], 1):
+                self._append(f"Set {i}:")
+                for p in g.files:
+                    self._append(f"  {p}")
+        self._run_bg(work)
+
+    def _stats(self) -> None:
+        base = self._validate()
+        if not base:
+            return
+        def work():
+            s = self.org.get_stats(base)
+            self._append(f"Total files: {s['total_files']}")
+            self._append(f"Total size: {s['total_size'] / (1024*1024):.2f} MB")
+            self._append(f"Small: {s['size_distribution']['small']}, Medium: {s['size_distribution']['medium']}, Large: {s['size_distribution']['large']}")
+        self._run_bg(work)
+
+    def run(self) -> None:
+        self.root.mainloop()
 
 @dataclass
 class MovePlan:
@@ -858,6 +1171,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run in interactive mode with menu options",
     )
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="Launch CLI menu (alias of --interactive)",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Launch basic Tkinter GUI",
+    )
     return parser.parse_args()
 
 
@@ -1027,8 +1350,21 @@ def main() -> None:
     logger = setup_logger(args.log_file, args.log_level)
     
     try:
+        # If no actionable flags provided, prefer GUI when a TTY is not required
+        if not (args.interactive or args.cli or args.find_duplicates or args.remove_duplicates or args.stats or args.schedule) and args.mode == "extension" and not args.dry_run and args.gui:
+            # explicit --gui handled above; this check keeps logic readable for future default switch
+            pass
+        # GUI mode
+        if args.gui:
+            try:
+                app = BasicOrganizerGUI(logger)
+                app.run()
+            except Exception as exc:  # noqa: BLE001
+                print(f"GUI failed to start: {exc}")
+                interactive_mode(logger)
+            return
         # Interactive mode
-        if args.interactive:
+        if args.interactive or args.cli:
             interactive_mode(logger)
             return
         

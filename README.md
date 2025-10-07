@@ -35,7 +35,7 @@ Advanced file organization with smart features, intelligent categorization, and 
 - **📈 Live Statistics**: Real-time file processing statistics
 - **🎛️ Multiple Organization Modes**: Easy switching between extension, date, size, and hybrid modes
 - **🔍 Enhanced Duplicate Detection**: Visual duplicate file identification
-- **📋 Operation Summary**: Detailed summary of all planned operations
+- **📋 Operation Summary**: Detailed summary of all planned operations.
 
 ### Advanced Capabilities
 - **Recursive Scanning**: Process subdirectories (skips category folders)

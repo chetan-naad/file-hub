@@ -2608,6 +2608,7 @@ class EnhancedFileOrganizerGUI:
         if not folder_path:
             return
         
+        
         def work():
             try:
                 self._working = True
